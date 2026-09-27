@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -46,6 +47,13 @@ def _system_fan(state: ThermostatState) -> StateType:
         return None
     return state.fan.name.lower()
 
+
+LAST_INTENDED_WRITE: Final = SensorEntityDescription(
+    key="last_intended_write",
+    translation_key="last_intended_write",
+    device_class=SensorDeviceClass.TIMESTAMP,
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
 
 SENSORS: Final[tuple[DaikinOneSensorDescription, ...]] = (
     DaikinOneSensorDescription(
@@ -108,7 +116,11 @@ async def async_setup_entry(
 
     def _factory(thermostat_id: str) -> list[Entity]:
         return [
-            DaikinOneSensor(coordinator, thermostat_id, description, legacy_ids=legacy_ids) for description in SENSORS
+            *(
+                DaikinOneSensor(coordinator, thermostat_id, description, legacy_ids=legacy_ids)
+                for description in SENSORS
+            ),
+            DaikinOneLastIntendedWriteSensor(coordinator, thermostat_id, LAST_INTENDED_WRITE),
         ]
 
     entry.async_on_unload(async_setup_platform_entities(coordinator, async_add_entities, _factory))
@@ -136,3 +148,26 @@ class DaikinOneSensor(DaikinOneEntity, SensorEntity):
     def native_value(self) -> StateType:
         """The measurement, or None while the thermostat has not reported it."""
         return self.entity_description.value_fn(self.thermostat.state)
+
+
+class DaikinOneLastIntendedWriteSensor(DaikinOneEntity, SensorEntity):
+    """When read-only mode last kept a write from Daikin, with that write as attributes."""
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Time of the most recent suppressed write (None until one happens)."""
+        writes = self.coordinator.suppressed_writes.get(self._thermostat_id)
+        return max((write.at for write in writes.values()), default=None) if writes else None
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any]:
+        """Whether read-only is on, plus the latest would-be request per endpoint and who asked."""
+        writes = self.coordinator.suppressed_writes.get(self._thermostat_id) or {}
+        attributes: dict[str, Any] = {"read_only": self.coordinator.read_only}
+        for endpoint, write in sorted(writes.items()):
+            attributes[endpoint] = {
+                **write.payload,
+                "at": write.at.isoformat(),
+                "user_id": write.context.user_id if write.context else None,
+            }
+        return attributes

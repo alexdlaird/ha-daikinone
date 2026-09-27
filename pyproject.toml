@@ -1,6 +1,6 @@
 [project]
 name = "ha-daikinone"
-version = "1.0.0"
+version = "1.1.0"
 description = "Home Assistant integration for Daikin One thermostats using the official Daikin One Open API"
 readme = "README.md"
 license = "MIT"

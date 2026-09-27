@@ -62,6 +62,7 @@ Columns: **HAD** = `zlangbert/ha-daikinone`, **DSP** = `apetrycki/daikinskyport`
 | --- | :-: | :-: | :-: | :-: | --- |
 | Fan circulation mode (off / always on / schedule) | ✓ | ✓ | ✓ | ✓ | Mapped differently in Home Assistant — a `select` entity (config category), not a climate `fan_mode`; unitary systems only |
 | Fan circulation speed (low / medium / high) | ✓ (`{id}-fan_speed`) | ✓ | ✓ | ✓ | Mapped differently in Home Assistant — a `select` entity; the legacy unique id `{id}-fan_speed` is preserved |
+| Fan-only HVAC mode | — | — | — | ✓ | Mapped differently in Home Assistant — composed as mode off + circulation always on; leaving it restores the prior circulation |
 | Target humidity / humidifier setpoint | ✓ | ✓ | ✓ | — | Not exposed by official API |
 | Dehumidification setpoint / overcool limit | — | ✓ | ✓ | — | Not exposed by official API |
 | One Clean (timed high-speed purge) | — | ✓ | ✓ | — | Not exposed by official API |
@@ -119,6 +120,7 @@ can be reimplemented**, regardless of effort.
 | Redacted diagnostics download | — | — | n/a | ✓ | Mapped differently in Home Assistant |
 | Repair issue when fan writes are unsupported | — | — | — | ✓ | Mapped differently in Home Assistant |
 | Configurable polling interval | ✓ | ✓ | ✓ | ✓ | Supported by official API — floor of 180 s, Daikin's documented limit |
+| Read-only mode (validate + record writes, send nothing) | — | — | — | ✓ | Mapped differently in Home Assistant — an option; on by default |
 
 ## Deferred (possible, not in this release)
 

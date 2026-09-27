@@ -1,10 +1,13 @@
 # Daikin One for Home Assistant
 
-[![CI](https://github.com/shsu/ha-daikinone/actions/workflows/ci.yml/badge.svg)](https://github.com/shsu/ha-daikinone/actions/workflows/ci.yml)
-[![hassfest](https://github.com/shsu/ha-daikinone/actions/workflows/hassfest.yml/badge.svg)](https://github.com/shsu/ha-daikinone/actions/workflows/hassfest.yml)
-[![HACS validation](https://github.com/shsu/ha-daikinone/actions/workflows/hacs.yml/badge.svg)](https://github.com/shsu/ha-daikinone/actions/workflows/hacs.yml)
+[![CI](https://github.com/alexdlaird/ha-daikinone/actions/workflows/ci.yml/badge.svg)](https://github.com/alexdlaird/ha-daikinone/actions/workflows/ci.yml)
+[![hassfest](https://github.com/alexdlaird/ha-daikinone/actions/workflows/hassfest.yml/badge.svg)](https://github.com/alexdlaird/ha-daikinone/actions/workflows/hassfest.yml)
+[![HACS validation](https://github.com/alexdlaird/ha-daikinone/actions/workflows/hacs.yml/badge.svg)](https://github.com/alexdlaird/ha-daikinone/actions/workflows/hacs.yml)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+A fork of [shsu/ha-daikinone](https://github.com/shsu/ha-daikinone) that adds a read-only mode, a composed
+fan-only mode, and range handling that works with wrapper thermostats.
 
 A Home Assistant integration for Daikin One thermostats, built on the official
 **Daikin One Open API** at `https://integrator-api.daikinskyport.com` and nothing else.
@@ -121,7 +124,7 @@ a new one; requesting a new token invalidates the old one.
 
 1. In Home Assistant, open **HACS**.
 2. Open the three-dot menu → **Custom repositories**.
-3. Repository: `https://github.com/shsu/ha-daikinone`, Type: **Integration** → **Add**.
+3. Repository: `https://github.com/alexdlaird/ha-daikinone`, Type: **Integration** → **Add**.
 4. Find **Daikin One** in the HACS integration list and **Download** it.
 5. Restart Home Assistant.
 
@@ -158,6 +161,7 @@ Open the integration entry → **Configure**.
 | Option | Default | Range | Description |
 | --- | --- | --- | --- |
 | Polling interval | `180` seconds | 180 to 3600 s, in 30 s steps | How often the integration reads every thermostat. 180 seconds is the minimum. It matches Daikin's documented limit of one poll per three minutes; the form rejects lower values and the code clamps them anyway. |
+| Read-only | on | on / off | While on, every change (setpoints, mode, fan, schedule) is validated exactly as a real write, then recorded instead of sent: nothing reaches Daikin, the entities keep showing the thermostat's real state, and the thermostat's own schedule is untouched. Each kept-back request lands in the **Last intended write** sensor and fires a `daikinone_write_suppressed` event. Turn it off to let Home Assistant control the thermostat. |
 
 Changing an option reloads the entry.
 
@@ -189,12 +193,13 @@ with the Daikin location name when your account has more than one location.
 
 | Platform | Entity | Category | Enabled by default | Description |
 | --- | --- | --- | --- | --- |
-| `climate` | Thermostat | | yes | HVAC modes off / heat / cool / heat_cool, filtered by the thermostat's mode limit. Current temperature and humidity, target setpoint or range, HVAC action, and the `emergency_heat` preset on systems that report it. Celsius natively; Home Assistant converts for display. |
+| `climate` | Thermostat | | yes | HVAC modes off / heat / cool / heat_cool, filtered by the thermostat's mode limit, plus fan_only when the thermostat reports a fan circulation setting (see [Fan only](#fan-only)). Current temperature and humidity, target setpoint or range, HVAC action, and the `emergency_heat` preset on systems that report it. Celsius natively; Home Assistant converts for display. |
 | `sensor` | Indoor temperature | | yes | Indoor temperature, °C. |
 | `sensor` | Indoor humidity | | yes | Indoor relative humidity, %. |
 | `sensor` | Outdoor temperature | | yes | Outdoor temperature as reported by the thermostat, °C. |
 | `sensor` | Outdoor humidity | | yes | Outdoor relative humidity, %. |
 | `sensor` | System fan | Diagnostic | yes | Enum: `auto` or `on`. Read-only; the API exposes the fan state but no way to set it. |
+| `sensor` | Last intended write | Diagnostic | yes | Timestamp of the latest write that [read-only mode](#options) kept from Daikin. Attributes: `read_only`, plus the latest would-be request per endpoint (`msp`, `fan`, `schedule`) with its time and the requesting user. |
 | `switch` | Schedule | | yes | Turns the thermostat's own schedule on and off. |
 | `binary_sensor` | Connectivity | Diagnostic | yes | On when the thermostat answered the last read. Stays available while the thermostat is offline so you can alert on it. |
 | `binary_sensor` | Geofencing | Diagnostic | yes | Read-only: whether geofencing is enabled on the thermostat. |
@@ -208,6 +213,22 @@ equipment ignores fan writes (Daikin documents that the fan runs at maximum spee
 S21 systems). The integration never writes to the fan endpoint unless you change one of the
 selects yourself, and a rejected write raises a repair issue that tells you to disable the two
 entities. You can disable them from each entity's settings page.
+
+### Fan only
+
+Daikin has no fan-only mode, so `fan_only` is composed: fan circulation **always on** with the
+thermostat **off**, and the thermostat reports `fan_only` whenever it is in that combination
+(however it got there). Entering it sets circulation first, then turns the mode off, so a
+failed second write leaves heating or cooling running rather than the house unconditioned.
+Leaving it restores the circulation setting from before (`off` or `schedule`, kept across
+restarts), or `off` when that is not known. Fan speed is unchanged throughout.
+
+### Setpoint ranges in heat or cool mode
+
+In heat and cool mode only one setpoint is live. A range whose sides are closer than Daikin's
+minimum gap (for example `target_temp_low == target_temp_high`, which some wrapper thermostats
+always send) keeps the live side and pushes the other one out by the gap, the same way a single
+`temperature` does. In heat_cool both sides are live, so such a range is still rejected.
 
 Diagnostics are available on the device page and are fully redacted. See
 [Troubleshooting](#troubleshooting).

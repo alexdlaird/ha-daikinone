@@ -29,6 +29,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 
 from custom_components.daikinone.const import (
     CONF_INTEGRATOR_TOKEN,
+    CONF_READ_ONLY,
     CONF_UID_SCHEMA,
     DOMAIN,
 )
@@ -84,6 +85,7 @@ def mock_config_entry() -> MockConfigEntry:
             CONF_API_KEY: API_KEY,
             CONF_INTEGRATOR_TOKEN: INTEGRATOR_TOKEN,
         },
+        options={CONF_READ_ONLY: False},
     )
 
 

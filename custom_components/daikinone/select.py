@@ -19,7 +19,7 @@ from .api import FanCirculate, FanCirculateSpeed, ThermostatState
 from .entity import DaikinOneEntity, async_setup_platform_entities
 
 if TYPE_CHECKING:
-    from homeassistant.core import HomeAssistant
+    from homeassistant.core import Context, HomeAssistant
     from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
     from . import DaikinOneConfigEntry
@@ -34,7 +34,7 @@ class DaikinOneSelectDescription(SelectEntityDescription):
     """A select plus how to read the current option and how to write a new one."""
 
     current_fn: Callable[[ThermostatState], str | None]
-    select_fn: Callable[[DaikinOneCoordinator, str, str], Coroutine[Any, Any, None]]
+    select_fn: Callable[[DaikinOneCoordinator, str, str, Context | None], Coroutine[Any, Any, None]]
 
 
 def _option(value: FanCirculate | FanCirculateSpeed | None) -> str | None:
@@ -51,8 +51,8 @@ SELECTS: Final[tuple[DaikinOneSelectDescription, ...]] = (
         entity_category=EntityCategory.CONFIG,
         options=["off", "always_on", "schedule"],
         current_fn=lambda state: _option(state.fan_circulate),
-        select_fn=lambda coordinator, thermostat_id, option: coordinator.async_set_fan(
-            thermostat_id, circulate=FanCirculate[option.upper()]
+        select_fn=lambda coordinator, thermostat_id, option, context: coordinator.async_set_fan(
+            thermostat_id, circulate=FanCirculate[option.upper()], context=context
         ),
     ),
     DaikinOneSelectDescription(
@@ -61,8 +61,8 @@ SELECTS: Final[tuple[DaikinOneSelectDescription, ...]] = (
         entity_category=EntityCategory.CONFIG,
         options=["low", "medium", "high"],
         current_fn=lambda state: _option(state.fan_circulate_speed),
-        select_fn=lambda coordinator, thermostat_id, option: coordinator.async_set_fan(
-            thermostat_id, speed=FanCirculateSpeed[option.upper()]
+        select_fn=lambda coordinator, thermostat_id, option, context: coordinator.async_set_fan(
+            thermostat_id, speed=FanCirculateSpeed[option.upper()], context=context
         ),
     ),
 )
@@ -94,4 +94,4 @@ class DaikinOneSelect(DaikinOneEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         """Write the setting; the coordinator carries the other field over."""
-        await self.entity_description.select_fn(self.coordinator, self._thermostat_id, option)
+        await self.entity_description.select_fn(self.coordinator, self._thermostat_id, option, self._context)

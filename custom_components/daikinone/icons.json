@@ -22,6 +22,9 @@
     "sensor": {
       "system_fan": {
         "default": "mdi:fan"
+      },
+      "last_intended_write": {
+        "default": "mdi:pencil-lock"
       }
     },
     "switch": {

@@ -20,7 +20,7 @@ from pytest_homeassistant_custom_component.common import (
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.daikinone.config_flow import entry_title
-from custom_components.daikinone.const import CONF_INTEGRATOR_TOKEN, DOMAIN, PLATFORMS
+from custom_components.daikinone.const import CONF_INTEGRATOR_TOKEN, CONF_READ_ONLY, DOMAIN, PLATFORMS
 
 from .conftest import API_KEY, DEVICES_URL, EMAIL, INTEGRATOR_TOKEN, TOKEN_URL, sequence
 
@@ -260,7 +260,7 @@ async def test_options_accept_300_and_reload(hass: HomeAssistant, init_integrati
         await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert init_integration.options == {CONF_SCAN_INTERVAL: 300}
+    assert init_integration.options == {CONF_SCAN_INTERVAL: 300, CONF_READ_ONLY: False}
     assert init_integration.runtime_data.base_interval == 300
 
 
@@ -271,4 +271,23 @@ async def test_options_reject_below_daikins_floor(hass: HomeAssistant, init_inte
     with pytest.raises(InvalidData):
         await hass.config_entries.options.async_configure(result["flow_id"], {CONF_SCAN_INTERVAL: 60})
 
-    assert init_integration.options == {}
+    assert init_integration.options == {CONF_READ_ONLY: False}
+
+
+async def test_options_turn_read_only_off_and_reload(hass: HomeAssistant, init_integration: MockConfigEntry) -> None:
+    # GIVEN
+    hass.config_entries.async_update_entry(init_integration, options={CONF_READ_ONLY: True})
+    await hass.async_block_till_done()
+    result = await hass.config_entries.options.async_init(init_integration.entry_id)
+
+    # WHEN
+    with patch("custom_components.daikinone.coordinator.random.uniform", return_value=0.0):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {CONF_SCAN_INTERVAL: 180, CONF_READ_ONLY: False}
+        )
+        await hass.async_block_till_done()
+
+    # THEN
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert init_integration.options == {CONF_SCAN_INTERVAL: 180, CONF_READ_ONLY: False}
+    assert init_integration.runtime_data.read_only is False

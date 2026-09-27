@@ -11,17 +11,18 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from collections.abc import Coroutine
-from dataclasses import replace
-from datetime import timedelta
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 import logging
 import random
 from typing import TYPE_CHECKING, Any, Final
 
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, Context, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr, issue_registry as ir
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import TimestampDataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import (
     DaikinAuthError,
@@ -36,8 +37,11 @@ from .api import (
     UnsupportedCapabilityError,
 )
 from .const import (
+    CONF_READ_ONLY,
     CONF_SCAN_INTERVAL,
+    DEFAULT_READ_ONLY,
     DOMAIN,
+    EVENT_WRITE_SUPPRESSED,
     JITTER_SECONDS,
     MAX_BACKOFF_SECONDS,
     MIN_SCAN_INTERVAL,
@@ -45,8 +49,6 @@ from .const import (
 )
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from . import DaikinOneConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
@@ -62,10 +64,23 @@ WRITE_ERROR_KEYS: Final[dict[str, str]] = {
     "unsupported_capability": "unsupported_capability",
 }
 
+#: Modes whose only live setpoint is the heat one.
+_HEATING_MODES: Final = (Mode.HEAT, Mode.EMERGENCY_HEAT)
+
 #: Slack for binary float error when comparing a computed setpoint gap against the delta.
 _DELTA_TOLERANCE: Final = 1e-9
 
-__all__ = ["WRITE_ERROR_KEYS", "DaikinOneCoordinator"]
+__all__ = ["WRITE_ERROR_KEYS", "DaikinOneCoordinator", "SuppressedWrite"]
+
+
+@dataclass(frozen=True, kw_only=True)
+class SuppressedWrite:
+    """A validated write that read-only mode kept from Daikin, exactly as it would have been sent."""
+
+    endpoint: str
+    payload: dict[str, Any]
+    at: datetime
+    context: Context | None = None
 
 
 def _fan_issue_id(thermostat_id: str) -> str:
@@ -83,6 +98,9 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
         self.client = client
         self.base_interval = max(MIN_SCAN_INTERVAL, int(entry.options.get(CONF_SCAN_INTERVAL, MIN_SCAN_INTERVAL)))
         self.last_error_code: str | None = None
+        self.read_only = bool(entry.options.get(CONF_READ_ONLY, DEFAULT_READ_ONLY))
+        #: Per thermostat, the latest suppressed write to each endpoint (msp / fan / schedule).
+        self.suppressed_writes: defaultdict[str, dict[str, SuppressedWrite]] = defaultdict(dict)
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._consecutive_failures = 0
         self._verify_cancel: CALLBACK_TYPE | None = None
@@ -200,6 +218,7 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
         mode: Mode | None = None,
         heat: float | None = None,
         cool: float | None = None,
+        context: Context | None = None,
     ) -> None:
         """PUT /msp with the full triple, filling the unspecified fields from local state."""
         async with self._locks[thermostat_id]:
@@ -214,11 +233,20 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
                 raise ServiceValidationError(translation_domain=DOMAIN, translation_key="state_unknown")
 
             delta = state.setpoint_delta or 0.0
+            explicit_range_violates_delta = (
+                heat is not None and cool is not None and cool_value - heat_value < delta - _DELTA_TOLERANCE
+            )
             if heat is not None and cool is None:
                 # Single-setpoint write: push the other side out to keep Daikin's delta.
                 cool_value = max(cool_value, heat_value + delta)
             elif cool is not None and heat is None:
                 heat_value = min(heat_value, cool_value - delta)
+            elif explicit_range_violates_delta and resolved_mode in _HEATING_MODES:
+                # Only the heat side is live in heat modes; an out-of-delta range (e.g. low == high from
+                # a caller that always sends both) keeps it and pushes the inert cool side out.
+                cool_value = heat_value + delta
+            elif explicit_range_violates_delta and resolved_mode is Mode.COOL:
+                heat_value = cool_value - delta
 
             # Checked on every path, not just an explicit pair: a mode-only write echoes the
             # snapshot's setpoints back, and Daikin rejects the whole PUT if they violate the
@@ -235,6 +263,9 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
             heat_value = round(heat_value, 1)
             cool_value = round(cool_value, 1)
 
+            payload = {"mode": int(resolved_mode), "heatSetpoint": heat_value, "coolSetpoint": cool_value}
+            if self._suppress_write(thermostat_id, "msp", payload, context):
+                return
             await self._call(self.client.async_set_mode_setpoints(thermostat_id, resolved_mode, heat_value, cool_value))
             # A /msp write turns the thermostat's own schedule (and away mode) off.
             self._apply(
@@ -245,10 +276,14 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
                 schedule_enabled=False,
             )
 
-    async def async_set_schedule_enabled(self, thermostat_id: str, enabled: bool) -> None:
+    async def async_set_schedule_enabled(
+        self, thermostat_id: str, enabled: bool, *, context: Context | None = None
+    ) -> None:
         """PUT /schedule and apply the new value optimistically."""
         async with self._locks[thermostat_id]:
             self._require(thermostat_id)
+            if self._suppress_write(thermostat_id, "schedule", {"scheduleEnabled": enabled}, context):
+                return
             await self._call(self.client.async_set_schedule_enabled(thermostat_id, enabled))
             self._apply(thermostat_id, schedule_enabled=enabled)
 
@@ -258,6 +293,7 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
         *,
         circulate: FanCirculate | None = None,
         speed: FanCirculateSpeed | None = None,
+        context: Context | None = None,
     ) -> None:
         """PUT /fan with both documented fields; unitary systems only."""
         async with self._locks[thermostat_id]:
@@ -270,6 +306,9 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
                 resolved_circulate = FanCirculate.OFF
             if resolved_speed is None or resolved_speed is FanCirculateSpeed.UNKNOWN:
                 resolved_speed = FanCirculateSpeed.LOW
+            payload = {"fanCirculate": int(resolved_circulate), "fanCirculateSpeed": int(resolved_speed)}
+            if self._suppress_write(thermostat_id, "fan", payload, context):
+                return
             try:
                 await self.client.async_set_fan(thermostat_id, resolved_circulate, resolved_speed)
             except DaikinOneError as err:
@@ -279,6 +318,29 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
 
             ir.async_delete_issue(self.hass, DOMAIN, _fan_issue_id(thermostat_id))
             self._apply(thermostat_id, fan_circulate=resolved_circulate, fan_circulate_speed=resolved_speed)
+
+    @callback
+    def _suppress_write(
+        self, thermostat_id: str, endpoint: str, payload: dict[str, Any], context: Context | None
+    ) -> bool:
+        """In read-only mode, record the write in place of sending it; True when it was kept back.
+
+        Nothing is applied optimistically: the local state keeps mirroring the thermostat, so a
+        suppressed write never shows up as a setpoint (or a schedule change) that did not happen.
+        """
+        if not self.read_only:
+            return False
+        self.suppressed_writes[thermostat_id][endpoint] = SuppressedWrite(
+            endpoint=endpoint, payload=payload, at=dt_util.utcnow(), context=context
+        )
+        _LOGGER.info("Read-only: not sending PUT /%s for %s: %s", endpoint, thermostat_id, payload)
+        self.hass.bus.async_fire(
+            EVENT_WRITE_SUPPRESSED,
+            {"thermostat_id": thermostat_id, "endpoint": endpoint, **payload},
+            context=context,
+        )
+        self.async_update_listeners()
+        return True
 
     def _require(self, thermostat_id: str) -> Thermostat:
         """Return the local snapshot, or refuse the write when the state is unknown."""

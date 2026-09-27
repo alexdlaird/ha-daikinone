@@ -16,6 +16,7 @@ from homeassistant.const import CONF_API_KEY, CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -28,7 +29,9 @@ import voluptuous as vol
 from .api import DaikinOneClient, DaikinOneError
 from .const import (
     CONF_INTEGRATOR_TOKEN,
+    CONF_READ_ONLY,
     CONF_SCAN_INTERVAL,
+    DEFAULT_READ_ONLY,
     DOMAIN,
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
@@ -156,14 +159,20 @@ class DaikinOneConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class DaikinOneOptionsFlow(OptionsFlowWithReload):
-    """Handle the Daikin One options (poll interval)."""
+    """Handle the Daikin One options (poll interval, read-only mode)."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Set the polling interval, never below Daikin's documented 3-minute floor."""
+        """Set the polling interval (never below Daikin's 3-minute floor) and read-only mode."""
         if user_input is not None:
-            return self.async_create_entry(data={CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL])})
+            return self.async_create_entry(
+                data={
+                    CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
+                    CONF_READ_ONLY: bool(user_input[CONF_READ_ONLY]),
+                }
+            )
 
         current = self.config_entry.options.get(CONF_SCAN_INTERVAL, MIN_SCAN_INTERVAL)
+        read_only = self.config_entry.options.get(CONF_READ_ONLY, DEFAULT_READ_ONLY)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -176,7 +185,8 @@ class DaikinOneOptionsFlow(OptionsFlowWithReload):
                             mode=NumberSelectorMode.BOX,
                             unit_of_measurement="s",
                         )
-                    )
+                    ),
+                    vol.Required(CONF_READ_ONLY, default=read_only): BooleanSelector(),
                 }
             ),
         )

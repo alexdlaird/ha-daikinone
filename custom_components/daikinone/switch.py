@@ -49,8 +49,8 @@ class DaikinOneScheduleSwitch(DaikinOneEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Let the thermostat follow its schedule again."""
-        await self.coordinator.async_set_schedule_enabled(self._thermostat_id, True)
+        await self.coordinator.async_set_schedule_enabled(self._thermostat_id, True, context=self._context)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Hold the current setpoints instead of following the schedule."""
-        await self.coordinator.async_set_schedule_enabled(self._thermostat_id, False)
+        await self.coordinator.async_set_schedule_enabled(self._thermostat_id, False, context=self._context)

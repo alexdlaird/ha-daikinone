@@ -926,6 +926,7 @@
         <HVACMode.HEAT: 'heat'>,
         <HVACMode.COOL: 'cool'>,
         <HVACMode.HEAT_COOL: 'heat_cool'>,
+        <HVACMode.FAN_ONLY: 'fan_only'>,
       ]),
       <ClimateEntityCapabilityAttribute.MAX_TEMP: 'max_temp'>: 32.0,
       <ClimateEntityCapabilityAttribute.MIN_TEMP: 'min_temp'>: 10.0,
@@ -977,6 +978,7 @@
         <HVACMode.HEAT: 'heat'>,
         <HVACMode.COOL: 'cool'>,
         <HVACMode.HEAT_COOL: 'heat_cool'>,
+        <HVACMode.FAN_ONLY: 'fan_only'>,
       ]),
       <ClimateEntityCapabilityAttribute.MAX_TEMP: 'max_temp'>: 32.0,
       <ClimateEntityCapabilityAttribute.MIN_TEMP: 'min_temp'>: 10.0,
@@ -1011,6 +1013,7 @@
         <HVACMode.HEAT: 'heat'>,
         <HVACMode.COOL: 'cool'>,
         <HVACMode.HEAT_COOL: 'heat_cool'>,
+        <HVACMode.FAN_ONLY: 'fan_only'>,
       ]),
       <ClimateEntityCapabilityAttribute.MAX_TEMP: 'max_temp'>: 32.0,
       <ClimateEntityCapabilityAttribute.MIN_TEMP: 'min_temp'>: 10.0,
@@ -1062,6 +1065,7 @@
         <HVACMode.HEAT: 'heat'>,
         <HVACMode.COOL: 'cool'>,
         <HVACMode.HEAT_COOL: 'heat_cool'>,
+        <HVACMode.FAN_ONLY: 'fan_only'>,
       ]),
       <ClimateEntityCapabilityAttribute.MAX_TEMP: 'max_temp'>: 32.0,
       <ClimateEntityCapabilityAttribute.MIN_TEMP: 'min_temp'>: 10.0,
@@ -1096,6 +1100,7 @@
         <HVACMode.HEAT: 'heat'>,
         <HVACMode.COOL: 'cool'>,
         <HVACMode.HEAT_COOL: 'heat_cool'>,
+        <HVACMode.FAN_ONLY: 'fan_only'>,
       ]),
       <ClimateEntityCapabilityAttribute.MAX_TEMP: 'max_temp'>: 32.0,
       <ClimateEntityCapabilityAttribute.MIN_TEMP: 'min_temp'>: 10.0,
@@ -1147,6 +1152,7 @@
         <HVACMode.HEAT: 'heat'>,
         <HVACMode.COOL: 'cool'>,
         <HVACMode.HEAT_COOL: 'heat_cool'>,
+        <HVACMode.FAN_ONLY: 'fan_only'>,
       ]),
       <ClimateEntityCapabilityAttribute.MAX_TEMP: 'max_temp'>: 32.0,
       <ClimateEntityCapabilityAttribute.MIN_TEMP: 'min_temp'>: 10.0,
@@ -1648,6 +1654,58 @@
     'state': '21.1',
   })
 # ---
+# name: test_platform_snapshot[sensor][sensor.cabin_main_room_last_intended_write-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': None,
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'sensor',
+    'entity_category': <EntityCategory.DIAGNOSTIC: 'diagnostic'>,
+    'entity_id': 'sensor.cabin_main_room_last_intended_write',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Last intended write',
+    'options': dict({
+    }),
+    'original_device_class': <SensorDeviceClass.TIMESTAMP: 'timestamp'>,
+    'original_icon': None,
+    'original_name': 'Last intended write',
+    'platform': 'daikinone',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'last_intended_write',
+    'unique_id': 'dev3-last_intended_write',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_platform_snapshot[sensor][sensor.cabin_main_room_last_intended_write-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'timestamp',
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Cabin Main Room Last intended write',
+      'read_only': False,
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.cabin_main_room_last_intended_write',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
 # name: test_platform_snapshot[sensor][sensor.cabin_main_room_outdoor_humidity-entry]
   EntityRegistryEntrySnapshot({
     'aliases': list([
@@ -1934,6 +1992,58 @@
     'state': '21.1',
   })
 # ---
+# name: test_platform_snapshot[sensor][sensor.home_main_floor_last_intended_write-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': None,
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'sensor',
+    'entity_category': <EntityCategory.DIAGNOSTIC: 'diagnostic'>,
+    'entity_id': 'sensor.home_main_floor_last_intended_write',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Last intended write',
+    'options': dict({
+    }),
+    'original_device_class': <SensorDeviceClass.TIMESTAMP: 'timestamp'>,
+    'original_icon': None,
+    'original_name': 'Last intended write',
+    'platform': 'daikinone',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'last_intended_write',
+    'unique_id': 'dev1-last_intended_write',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_platform_snapshot[sensor][sensor.home_main_floor_last_intended_write-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'timestamp',
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Home Main Floor Last intended write',
+      'read_only': False,
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.home_main_floor_last_intended_write',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
 # name: test_platform_snapshot[sensor][sensor.home_main_floor_outdoor_humidity-entry]
   EntityRegistryEntrySnapshot({
     'aliases': list([
@@ -2218,6 +2328,58 @@
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': '21.1',
+  })
+# ---
+# name: test_platform_snapshot[sensor][sensor.home_upstairs_last_intended_write-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': None,
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'sensor',
+    'entity_category': <EntityCategory.DIAGNOSTIC: 'diagnostic'>,
+    'entity_id': 'sensor.home_upstairs_last_intended_write',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Last intended write',
+    'options': dict({
+    }),
+    'original_device_class': <SensorDeviceClass.TIMESTAMP: 'timestamp'>,
+    'original_icon': None,
+    'original_name': 'Last intended write',
+    'platform': 'daikinone',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'last_intended_write',
+    'unique_id': 'dev2-last_intended_write',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_platform_snapshot[sensor][sensor.home_upstairs_last_intended_write-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'timestamp',
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Home Upstairs Last intended write',
+      'read_only': False,
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.home_upstairs_last_intended_write',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
   })
 # ---
 # name: test_platform_snapshot[sensor][sensor.home_upstairs_outdoor_humidity-entry]

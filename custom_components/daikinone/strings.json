@@ -64,10 +64,12 @@
       "init": {
         "title": "Daikin One options",
         "data": {
-          "scan_interval": "Polling interval"
+          "scan_interval": "Polling interval",
+          "read_only": "Read-only"
         },
         "data_description": {
-          "scan_interval": "How often the thermostats are read, in seconds. Daikin's API usage limits require at least 180 seconds (3 minutes); a small random offset is added to each poll."
+          "scan_interval": "How often the thermostats are read, in seconds. Daikin's API usage limits require at least 180 seconds (3 minutes); a small random offset is added to each poll.",
+          "read_only": "Validate and record every change (see the Last intended write sensor) without sending it to Daikin. The thermostat and the Daikin app stay in charge. Turn off to let Home Assistant control the thermostat."
         }
       }
     }
@@ -103,6 +105,9 @@
           "auto": "Auto",
           "on": "On"
         }
+      },
+      "last_intended_write": {
+        "name": "Last intended write"
       }
     },
     "binary_sensor": {
