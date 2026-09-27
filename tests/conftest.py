@@ -8,7 +8,7 @@ secret below is an obvious placeholder.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Callable, Coroutine
+from collections.abc import AsyncGenerator, Callable, Coroutine, Iterator
 import re
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -56,6 +56,13 @@ PUT_URL_RE = re.compile(rf"{re.escape(DEVICES_URL)}/[^/]+/(msp|schedule|fan)$")
 @pytest.fixture(autouse=True)
 def _auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Enable loading custom integrations in all tests."""
+
+
+@pytest.fixture(autouse=True)
+def _no_transport_retry_delay() -> Iterator[None]:
+    """The single transport retry waits 2 s in production; tests must not."""
+    with patch("custom_components.daikinone.api.const.TRANSPORT_RETRY_DELAY", 0):
+        yield
 
 
 @pytest.fixture

@@ -9,6 +9,7 @@ from typing import Any
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
+from . import const
 from .auth import IntegratorAuth
 from .const import API_BASE_URL, DEVICES_PATH, MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT
 from .exceptions import (
@@ -94,6 +95,18 @@ class DaikinOneClient:
             raise UnsupportedCapabilityError(err.status) from err
 
     async def _request(self, method: str, path: str, json: Any = None) -> Any:
+        """Perform a request, retrying once when it never completed (dropped connection, timeout).
+
+        Every endpoint is safe to repeat: reads are reads, and each write sets absolute values.
+        """
+        try:
+            return await self._request_once(method, path, json)
+        except TransportError as err:
+            _LOGGER.debug("%s %s failed (%s); retrying once", method, path, err.cause)
+            await asyncio.sleep(const.TRANSPORT_RETRY_DELAY)
+            return await self._request_once(method, path, json)
+
+    async def _request_once(self, method: str, path: str, json: Any = None) -> Any:
         """Perform one authenticated request, refreshing the token once on a 401."""
         url = f"{API_BASE_URL}{path}"
         for attempt in (0, 1):
@@ -114,7 +127,7 @@ class DaikinOneClient:
                         retry_after = retry_after_from(resp.headers)
                         text = await resp.text()
                 except (TimeoutError, ClientError) as err:
-                    raise TransportError from err
+                    raise TransportError.from_cause(err) from err
 
             _LOGGER.debug("%s %s -> %s", method, path, status)
 

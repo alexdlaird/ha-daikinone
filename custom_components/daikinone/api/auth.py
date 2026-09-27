@@ -100,7 +100,7 @@ class IntegratorAuth:
                     retry_after = retry_after_from(resp.headers)
                     text = await resp.text()
             except (TimeoutError, ClientError) as err:
-                raise TransportError from err
+                raise TransportError.from_cause(err) from err
 
         _LOGGER.debug("POST %s -> %s", TOKEN_PATH, status)
 

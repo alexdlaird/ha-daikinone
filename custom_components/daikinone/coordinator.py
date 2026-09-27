@@ -28,12 +28,15 @@ from .api import (
     DaikinAuthError,
     DaikinOneClient,
     DaikinOneError,
+    DeviceSummary,
     FanCirculate,
     FanCirculateSpeed,
     Mode,
     RateLimitedError,
+    ServerError,
     Thermostat,
     ThermostatState,
+    TransportError,
     UnsupportedCapabilityError,
 )
 from .const import (
@@ -64,6 +67,12 @@ WRITE_ERROR_KEYS: Final[dict[str, str]] = {
     "unsupported_capability": "unsupported_capability",
 }
 
+#: Failures that are usually over by the next poll: a dropped connection, a timeout, a 5xx.
+TRANSIENT_ERRORS: Final = (TransportError, ServerError)
+#: Consecutive polls that may fail transiently before entities go unavailable; the last good
+#: reading is kept meanwhile (it is at most one poll interval older than it would be anyway).
+TRANSIENT_POLLS_TOLERATED: Final = 1
+
 #: Modes whose only live setpoint is the heat one.
 _HEATING_MODES: Final = (Mode.HEAT, Mode.EMERGENCY_HEAT)
 
@@ -81,6 +90,11 @@ class SuppressedWrite:
     payload: dict[str, Any]
     at: datetime
     context: Context | None = None
+
+
+def describe(err: DaikinOneError) -> str:
+    """The error code, plus the underlying exception class for transport failures."""
+    return f"{err.code}: {err.cause}" if isinstance(err, TransportError) else err.code
 
 
 def _fan_issue_id(thermostat_id: str) -> str:
@@ -103,6 +117,8 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
         self.suppressed_writes: defaultdict[str, dict[str, SuppressedWrite]] = defaultdict(dict)
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._consecutive_failures = 0
+        self._transient_streak = 0
+        self._device_transient_streaks: dict[str, int] = {}
         self._verify_cancel: CALLBACK_TYPE | None = None
         self._closed = False
         self._offline_logged: set[str] = set()
@@ -127,6 +143,8 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
         except DaikinAuthError as err:
             raise ConfigEntryAuthFailed("Daikin One credentials were rejected") from err
         except DaikinOneError as err:
+            if self._tolerate_account_failure(err):
+                return self.data
             raise self._account_failure(err) from err
 
         results = await asyncio.gather(
@@ -139,6 +157,7 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
         for summary, result in zip(summaries, results, strict=True):
             if isinstance(result, ThermostatState):
                 thermostats[summary.id] = Thermostat(summary, result, online=True)
+                self._device_transient_streaks.pop(summary.id, None)
                 if summary.id in self._offline_logged:
                     self._offline_logged.discard(summary.id)
                     _LOGGER.info("Thermostat %s is reachable again", summary.name)
@@ -150,6 +169,9 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
             if isinstance(result, DaikinOneError):
                 self.last_error_code = result.code
                 known = previous.get(summary.id)
+                if known is not None and self._tolerate_device_failure(summary, result, known):
+                    thermostats[summary.id] = replace(known, summary=summary)
+                    continue
                 thermostats[summary.id] = Thermostat(
                     summary,
                     known.state if known is not None else ThermostatState(),
@@ -163,9 +185,39 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
 
         self._offline_logged &= thermostats.keys()
         self._consecutive_failures = 0
+        self._transient_streak = 0
         self.update_interval = self._jittered()
         self._async_remove_stale_devices(thermostats, previous)
         return thermostats
+
+    def _tolerate_account_failure(self, err: DaikinOneError) -> bool:
+        """Keep the last reading through one transient failure of the whole poll."""
+        if (
+            not isinstance(err, TRANSIENT_ERRORS)
+            or not self.data
+            or self._transient_streak >= TRANSIENT_POLLS_TOLERATED
+        ):
+            return False
+        self._transient_streak += 1
+        self.last_error_code = err.code
+        _LOGGER.warning("Daikin One poll failed (%s); keeping the last reading until the next poll", describe(err))
+        return True
+
+    def _tolerate_device_failure(self, summary: DeviceSummary, err: DaikinOneError, known: Thermostat) -> bool:
+        """Keep a reachable thermostat's last reading through one transient failure of its own read.
+
+        Daikin's explicit DeviceOfflineException is never tolerated: it is the truth, not a blip.
+        """
+        streak = self._device_transient_streaks.get(summary.id, 0)
+        if not isinstance(err, TRANSIENT_ERRORS) or not known.online or streak >= TRANSIENT_POLLS_TOLERATED:
+            return False
+        self._device_transient_streaks[summary.id] = streak + 1
+        _LOGGER.warning(
+            "Reading thermostat %s failed (%s); keeping its last reading until the next poll",
+            summary.name,
+            describe(err),
+        )
+        return True
 
     def _account_failure(self, err: DaikinOneError) -> UpdateFailed:
         """Build an UpdateFailed carrying the backoff HA should honour before retrying."""
@@ -180,7 +232,7 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
         retry_after: float | None = getattr(err, "retry_after", None)
         if retry_after is not None:
             delay = max(delay, retry_after)
-        return UpdateFailed(f"Daikin One update failed ({err.code})", retry_after=delay)
+        return UpdateFailed(f"Daikin One update failed ({describe(err)})", retry_after=delay)
 
     @callback
     def _async_remove_stale_devices(self, thermostats: dict[str, Thermostat], previous: dict[str, Thermostat]) -> None:

@@ -180,6 +180,13 @@ After a successful write the integration shows the new value immediately, then w
 seconds before one confirmation read. Writes that land close together share a single
 confirmation read rather than queuing one each.
 
+A request that never completes (dropped connection, timeout) is retried once after 2 seconds;
+every endpoint is safe to repeat, because reads are reads and writes set absolute values. If a whole
+poll still fails with a network or server (5xx) error, the last reading is kept for one more poll
+interval rather than taking every entity unavailable over a single blip; a second failure in a row
+does. Daikin's explicit "device offline" answer is never masked, and failures are logged with the
+underlying exception class (for example `transport_error: ServerDisconnectedError`).
+
 Access tokens live 900 seconds and are refreshed 60 seconds early, under a single lock, so
 concurrent requests never trigger more than one token request. On HTTP 429 the integration
 backs off exponentially up to 30 minutes and honours a `Retry-After` header when Daikin sends

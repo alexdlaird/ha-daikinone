@@ -76,7 +76,7 @@ async def test_diagnostics_reports_state_and_scheduling(hass: HomeAssistant, ini
     """The useful part survives redaction: version, host, polling, token life, full state."""
     result = await async_get_config_entry_diagnostics(hass, init_integration)
 
-    assert result["integration_version"] == "1.2.0"
+    assert result["integration_version"] == "1.3.0"
     assert result["api_host"] == "https://integrator-api.daikinskyport.com"
     assert result["base_interval_seconds"] >= 180
     assert result["current_update_interval_seconds"] >= 180
@@ -143,5 +143,5 @@ async def test_diagnostics_of_an_entry_that_never_set_up(
     _assert_no_secrets(serialized)
     assert "legacy-password-placeholder" not in serialized
     assert result["entry"]["data"]["password"] == REDACTED
-    assert result["integration_version"] == "1.2.0"
+    assert result["integration_version"] == "1.3.0"
     assert "thermostats" not in result

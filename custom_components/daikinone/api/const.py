@@ -14,6 +14,8 @@ DEVICES_PATH: Final = "/v1/devices"
 
 #: Total timeout for a single HTTP request, in seconds.
 REQUEST_TIMEOUT: Final = 30
+#: Seconds before the single retry of a request that failed at the transport level.
+TRANSPORT_RETRY_DELAY: Final = 2.0
 #: Refresh the access token this many seconds before it expires (documented lifetime: 900 s).
 TOKEN_REFRESH_MARGIN: Final = 60
 #: Daikin's "API USAGE LIMITS": no more than 3 open requests at a time.
@@ -26,4 +28,5 @@ __all__ = [
     "REQUEST_TIMEOUT",
     "TOKEN_PATH",
     "TOKEN_REFRESH_MARGIN",
+    "TRANSPORT_RETRY_DELAY",
 ]

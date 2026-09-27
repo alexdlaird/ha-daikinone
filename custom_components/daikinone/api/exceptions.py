@@ -123,6 +123,14 @@ class TransportError(DaikinOneError):
 
     code = "transport_error"
     message = "Could not reach the Daikin One API"
+    #: The underlying exception's class name (never its text, which can carry request details).
+    cause: str = "unknown"
+
+    @classmethod
+    def from_cause(cls, err: BaseException) -> TransportError:
+        error = cls()
+        error.cause = type(err).__name__
+        return error
 
 
 class MalformedResponseError(DaikinOneError):

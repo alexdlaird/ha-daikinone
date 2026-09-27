@@ -18,7 +18,7 @@ from pytest_homeassistant_custom_component.common import (
     load_json_array_fixture,
     load_json_object_fixture,
 )
-from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
+from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker, AiohttpClientMockResponse
 
 from custom_components.daikinone.api import (
     DaikinOneClient,
@@ -262,3 +262,93 @@ def test_message_from_body_returns_none_when_absent(body: str) -> None:
 def test_retry_after_ignores_non_numeric_headers(headers: dict[str, str]) -> None:
     """Only the delay-seconds form of Retry-After is honoured."""
     assert retry_after_from(headers) is None
+
+
+def _flaky(*responses: dict[str, Any] | BaseException) -> Any:
+    queue = list(responses)
+
+    async def _side_effect(method: str, url: Any, data: Any) -> Any:
+        item = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(item, BaseException):
+            raise item
+        return AiohttpClientMockResponse(method=method, url=url, **item)
+
+    return _side_effect
+
+
+@pytest.mark.parametrize("error", [aiohttp.ServerDisconnectedError(), TimeoutError(), aiohttp.ClientError()])
+async def test_a_transport_failure_is_retried_once(
+    client: DaikinOneClient, aioclient_mock: AiohttpClientMocker, error: BaseException
+) -> None:
+    # GIVEN
+    aioclient_mock.post(TOKEN_URL, json=_token_json())
+    aioclient_mock.get(DEVICES_URL, side_effect=_flaky(error, {"json": load_json_array_fixture("devices.json")}))
+
+    # WHEN
+    devices = await client.async_get_devices()
+
+    # THEN
+    assert devices
+    assert len(calls(aioclient_mock, "GET", "/v1/devices")) == 2
+
+
+async def test_a_second_transport_failure_names_its_cause(
+    client: DaikinOneClient, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    aioclient_mock.post(TOKEN_URL, json=_token_json())
+    aioclient_mock.get(DEVICES_URL, side_effect=_flaky(aiohttp.ServerDisconnectedError()))
+
+    # WHEN
+    with pytest.raises(TransportError) as err:
+        await client.async_get_devices()
+
+    # THEN
+    assert err.value.cause == "ServerDisconnectedError"
+    assert len(calls(aioclient_mock, "GET", "/v1/devices")) == 2
+
+
+async def test_a_token_request_transport_failure_is_retried(
+    client: DaikinOneClient, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    aioclient_mock.post(TOKEN_URL, side_effect=_flaky(TimeoutError(), {"json": _token_json()}))
+    aioclient_mock.get(DEVICES_URL, json=load_json_array_fixture("devices.json"))
+
+    # WHEN
+    devices = await client.async_get_devices()
+
+    # THEN
+    assert devices
+    assert len(calls(aioclient_mock, "POST", "/v1/token")) == 2
+
+
+async def test_a_write_is_retried_after_a_transport_failure(
+    client: DaikinOneClient, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    aioclient_mock.post(TOKEN_URL, json=_token_json())
+    aioclient_mock.put(
+        f"{DEVICES_URL}/dev1/msp", side_effect=_flaky(aiohttp.ClientError(), {"json": {"message": "ok"}})
+    )
+
+    # WHEN
+    await client.async_set_mode_setpoints("dev1", Mode.HEAT, 20.0, 24.0)
+
+    # THEN
+    puts = calls(aioclient_mock, "PUT", "/v1/devices/dev1/msp")
+    assert len(puts) == 2
+    assert puts[0][2] == puts[1][2] == {"mode": 1, "heatSetpoint": 20.0, "coolSetpoint": 24.0}
+
+
+async def test_http_errors_are_not_retried(client: DaikinOneClient, aioclient_mock: AiohttpClientMocker) -> None:
+    # GIVEN
+    aioclient_mock.post(TOKEN_URL, json=_token_json())
+    aioclient_mock.get(DEVICES_URL, status=500)
+
+    # WHEN
+    with pytest.raises(ServerError):
+        await client.async_get_devices()
+
+    # THEN
+    assert len(calls(aioclient_mock, "GET", "/v1/devices")) == 1

@@ -360,12 +360,12 @@ async def test_retry_after_header_is_honoured(
 async def test_server_error_then_recovery(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    """An account-level 500 marks the update failed; the next poll recovers."""
+    """One account-level 500 is ridden out on the last reading; a second fails; then it recovers."""
     devices = load_json_array_fixture("devices.json")
     aioclient_mock.post(TOKEN_URL, json=load_json_object_fixture("token.json"))
     aioclient_mock.get(
         DEVICES_URL,
-        side_effect=sequence({"json": devices}, {"status": 500}, {"json": devices}),
+        side_effect=sequence({"json": devices}, {"status": 500}, {"status": 500}, {"json": devices}),
     )
     for device_id in DEVICE_IDS:
         aioclient_mock.get(f"{DEVICES_URL}/{device_id}", json=load_json_object_fixture("device_oneplus.json"))
@@ -373,8 +373,12 @@ async def test_server_error_then_recovery(
     coordinator = await _setup(hass, mock_config_entry)
 
     await coordinator.async_refresh()
-    assert coordinator.last_update_success is False
+    assert coordinator.last_update_success is True
     assert coordinator.last_error_code == "server_error"
+    assert set(coordinator.data) == set(DEVICE_IDS)
+
+    await coordinator.async_refresh()
+    assert coordinator.last_update_success is False
 
     await coordinator.async_refresh()
     assert coordinator.last_update_success is True
@@ -387,13 +391,18 @@ async def test_server_error_defers_the_next_poll_by_the_exponential_backoff(
     mock_config_entry: MockConfigEntry,
     aioclient_mock: AiohttpClientMocker,
 ) -> None:
-    """A 5xx backs the poll off just like a 429 does: base * 2**1 = 360 s, not 180 s."""
+    """Once a 5xx is no longer tolerated, it backs the poll off like a 429: base * 2**1 = 360 s."""
     _mock_account(
         aioclient_mock,
         devices={"side_effect": sequence({"json": _account()}, {"status": 500})},
     )
     coordinator = await _setup(hass, mock_config_entry)
     unsub = coordinator.async_add_listener(lambda: None)
+
+    freezer.tick(181)
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert coordinator.last_update_success is True
 
     freezer.tick(181)
     async_fire_time_changed(hass)

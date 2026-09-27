@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from typing import Any
 from unittest.mock import patch
 
+import aiohttp
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, Platform
@@ -160,13 +161,16 @@ async def test_an_account_level_failure_makes_everything_unavailable_and_recover
     mock_config_entry: MockConfigEntry,
     aioclient_mock: AiohttpClientMocker,
 ) -> None:
-    """A failing device list takes every entity down, and the next good poll restores them."""
+    """A device list failing twice running takes every entity down; the next good poll restores them."""
     _mock_account(
         aioclient_mock,
-        devices={"side_effect": sequence({"json": _account()}, {"status": 500}, {"json": _account()})},
+        devices={"side_effect": sequence({"json": _account()}, {"status": 500}, {"status": 500}, {"json": _account()})},
     )
     await _setup(hass, mock_config_entry)
     climates = [_climate_id(hass, device_id) for device_id in DEVICE_IDS]
+    assert all(hass.states.get(entity_id).state != STATE_UNAVAILABLE for entity_id in climates)
+
+    await _poll(hass, freezer)
     assert all(hass.states.get(entity_id).state != STATE_UNAVAILABLE for entity_id in climates)
 
     await _poll(hass, freezer)
@@ -195,3 +199,81 @@ async def test_undocumented_enum_values_leave_entities_unknown(
     registry = er.async_get(hass)
     assert hass.states.get(registry.async_get_entity_id("sensor", DOMAIN, "dev1-system_fan")).state == "unknown"
     assert hass.states.get(registry.async_get_entity_id(BINARY_SENSOR, DOMAIN, "dev1-heating")).state == "unknown"
+
+
+async def test_one_transient_thermostat_read_failure_keeps_it_available(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # GIVEN
+    detail = load_json_object_fixture("device_oneplus.json")
+    _mock_account(
+        aioclient_mock,
+        details={
+            "dev1": {"side_effect": sequence({"json": detail}, {"status": 503}, {"status": 503}, {"json": detail})}
+        },
+    )
+    await _setup(hass, mock_config_entry)
+    climate = _climate_id(hass, "dev1")
+    online = er.async_get(hass).async_get_entity_id(BINARY_SENSOR, DOMAIN, "dev1-online")
+
+    # WHEN
+    await _poll(hass, freezer)
+    after_one = (hass.states.get(climate).state, hass.states.get(online).state)
+    await _poll(hass, freezer)
+    after_two = (hass.states.get(climate).state, hass.states.get(online).state)
+    await _poll(hass, freezer)
+
+    # THEN
+    assert after_one == ("heat_cool", STATE_ON)
+    assert after_two[0] == STATE_UNAVAILABLE
+    assert hass.states.get(climate).state == "heat_cool"
+    assert "keeping its last reading until the next poll" in caplog.text
+
+
+async def test_daikins_offline_answer_is_never_masked(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    # GIVEN
+    detail = load_json_object_fixture("device_oneplus.json")
+    offline = {"status": 400, "json": {"messages": "DeviceOfflineException"}}
+    _mock_account(aioclient_mock, details={"dev1": {"side_effect": sequence({"json": detail}, offline)}})
+    await _setup(hass, mock_config_entry)
+
+    # WHEN
+    await _poll(hass, freezer)
+
+    # THEN
+    assert hass.states.get(_climate_id(hass, "dev1")).state == STATE_UNAVAILABLE
+
+
+async def test_a_tolerated_account_failure_is_logged_with_its_cause(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # GIVEN
+    _mock_account(aioclient_mock)
+    await _setup(hass, mock_config_entry)
+    climates = [_climate_id(hass, device_id) for device_id in DEVICE_IDS]
+    aioclient_mock.clear_requests()
+    _mock_account(aioclient_mock, devices={"exc": aiohttp.ServerDisconnectedError()})
+
+    # WHEN
+    await _poll(hass, freezer)
+    after_one = [hass.states.get(entity_id).state for entity_id in climates]
+    await _poll(hass, freezer)
+
+    # THEN
+    assert STATE_UNAVAILABLE not in after_one
+    assert "Daikin One poll failed (transport_error: ServerDisconnectedError)" in caplog.text
+    assert all(hass.states.get(entity_id).state == STATE_UNAVAILABLE for entity_id in climates)
+    assert "Daikin One update failed (transport_error: ServerDisconnectedError)" in caplog.text
