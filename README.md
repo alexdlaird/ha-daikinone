@@ -6,8 +6,8 @@
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A fork of [shsu/ha-daikinone](https://github.com/shsu/ha-daikinone) that adds a read-only mode, a composed
-fan-only mode, and range handling that works with wrapper thermostats.
+A fork of [shsu/ha-daikinone](https://github.com/shsu/ha-daikinone) that adds a read-only mode, composed off /
+fan-only modes that preserve your circulation setting, and range handling that works with wrapper thermostats.
 
 A Home Assistant integration for Daikin One thermostats, built on the official
 **Daikin One Open API** at `https://integrator-api.daikinskyport.com` and nothing else.
@@ -193,7 +193,7 @@ with the Daikin location name when your account has more than one location.
 
 | Platform | Entity | Category | Enabled by default | Description |
 | --- | --- | --- | --- | --- |
-| `climate` | Thermostat | | yes | HVAC modes off / heat / cool / heat_cool, filtered by the thermostat's mode limit, plus fan_only when the thermostat reports a fan circulation setting (see [Fan only](#fan-only)). Current temperature and humidity, target setpoint or range, HVAC action, and the `emergency_heat` preset on systems that report it. Celsius natively; Home Assistant converts for display. |
+| `climate` | Thermostat | | yes | HVAC modes off / heat / cool / heat_cool, filtered by the thermostat's mode limit, plus fan_only when the thermostat reports a fan circulation setting (see [Off and fan only](#off-and-fan-only)). Current temperature and humidity, target setpoint or range, HVAC action, and the `emergency_heat` preset on systems that report it. Celsius natively; Home Assistant converts for display. |
 | `sensor` | Indoor temperature | | yes | Indoor temperature, °C. |
 | `sensor` | Indoor humidity | | yes | Indoor relative humidity, %. |
 | `sensor` | Outdoor temperature | | yes | Outdoor temperature as reported by the thermostat, °C. |
@@ -214,14 +214,25 @@ S21 systems). The integration never writes to the fan endpoint unless you change
 selects yourself, and a rejected write raises a repair issue that tells you to disable the two
 entities. You can disable them from each entity's settings page.
 
-### Fan only
+### Off and fan only
 
-Daikin has no fan-only mode, so `fan_only` is composed: fan circulation **always on** with the
-thermostat **off**, and the thermostat reports `fan_only` whenever it is in that combination
-(however it got there). Entering it sets circulation first, then turns the mode off, so a
-failed second write leaves heating or cooling running rather than the house unconditioned.
-Leaving it restores the circulation setting from before (`off` or `schedule`, kept across
-restarts), or `off` when that is not known. Fan speed is unchanged throughout.
+Daikin has no fan-only mode; fan circulation is a separate setting (its own endpoint) that is
+independent of the thermostat mode. So both "off" modes are composed from the mode plus the
+circulation setting:
+
+| Home Assistant mode | Thermostat mode | Fan circulation |
+| --- | --- | --- |
+| `off` | off | off |
+| `fan_only` | off | always on |
+
+The entity reports whichever combination the thermostat is in, however it got there (with
+circulation on `schedule`, mode off reads as `off`). Entering `off` or `fan_only` from an active
+mode remembers your circulation setting (kept across restarts), and switching back to an active
+mode restores it, so an always-on or scheduled circulation preference survives an off period.
+`off` turns the mode off before the fan; `fan_only` sets the fan first, so a failed second write
+leaves the equipment conditioning rather than doing nothing. Only writes that change something
+are sent, and fan speed is never touched. Equipment without fan circulation (VRV, splits) gets
+plain `off` and no `fan_only`.
 
 ### Setpoint ranges in heat or cool mode
 

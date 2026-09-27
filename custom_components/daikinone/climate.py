@@ -5,9 +5,11 @@ the coordinator, which owns the per-device lock and the local snapshot every wri
 from. This module only translates between Home Assistant's climate vocabulary and the
 documented API enums.
 
-Daikin has no fan-only mode. `HVACMode.FAN_ONLY` is composed as mode off + fan circulation
-always on, and leaving it puts circulation back to what it was before (persisted across
-restarts), or off when that is not known.
+Daikin has no fan-only mode, and fan circulation is set independently of the mode. The two
+"off" modes are therefore composed from mode + circulation: `OFF` is mode off with
+circulation off, `FAN_ONLY` is mode off with circulation always on. Entering either from an
+active mode remembers the circulation setting (persisted across restarts) and leaving them
+puts it back, so an always-on or scheduled circulation preference survives an off period.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from homeassistant.components.climate.const import (
     HVACMode,
 )
 from homeassistant.const import ATTR_TEMPERATURE, PRECISION_TENTHS, UnitOfTemperature
+from homeassistant.core import callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
@@ -59,8 +62,10 @@ MODE_BY_HVAC_MODE: Final[dict[HVACMode, Mode]] = {
     HVACMode.HEAT_COOL: Mode.AUTO,
 }
 ALL_HVAC_MODES: Final[list[HVACMode]] = [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL, HVACMode.HEAT_COOL]
-#: Circulation settings that can be restored when leaving fan only (not always on, not unknown).
-RESTORABLE_CIRCULATION: Final = (FanCirculate.OFF, FanCirculate.SCHEDULE)
+#: Circulation settings worth restoring (anything the thermostat reported and we understood).
+RESTORABLE_CIRCULATION: Final = (FanCirculate.OFF, FanCirculate.ALWAYS_ON, FanCirculate.SCHEDULE)
+#: The composed modes that turn the thermostat's mode off.
+OFF_FAMILY: Final = (HVACMode.OFF, HVACMode.FAN_ONLY)
 HVAC_MODES_BY_LIMIT: Final[dict[ModeLimit, list[HVACMode]]] = {
     ModeLimit.HEAT_ONLY: [HVACMode.OFF, HVACMode.HEAT],
     ModeLimit.COOL_ONLY: [HVACMode.OFF, HVACMode.COOL],
@@ -91,8 +96,8 @@ async def async_setup_entry(
 
 
 @dataclass
-class CirculationBeforeFanOnly(ExtraStoredData):
-    """The fan circulation setting to restore when fan only ends."""
+class CirculationBeforeOff(ExtraStoredData):
+    """The fan circulation setting to restore when off or fan only ends."""
 
     circulate: FanCirculate | None
 
@@ -122,18 +127,20 @@ class DaikinOneClimate(DaikinOneEntity, ClimateEntity, RestoreEntity):
         """Build the entity with the unique id ha-daikinone used, so entities survive."""
         super().__init__(coordinator, thermostat_id)
         self._attr_unique_id = f"{thermostat_id}-climate"
-        self._circulation_before_fan_only: FanCirculate | None = None
+        self._circulation_before_off: FanCirculate | None = None
+        self._last_seen_mode: Mode | None = None
 
     async def async_added_to_hass(self) -> None:
-        """Restore the circulation setting fan only will hand back."""
+        """Restore the circulation setting that leaving off / fan only will hand back."""
         await super().async_added_to_hass()
+        self._last_seen_mode = self._state.mode
         if (stored := await self.async_get_last_extra_data()) is not None:
-            self._circulation_before_fan_only = CirculationBeforeFanOnly.from_dict(stored.as_dict()).circulate
+            self._circulation_before_off = CirculationBeforeOff.from_dict(stored.as_dict()).circulate
 
     @property
-    def extra_restore_state_data(self) -> CirculationBeforeFanOnly:
-        """Persist the circulation setting to restore when fan only ends."""
-        return CirculationBeforeFanOnly(self._circulation_before_fan_only)
+    def extra_restore_state_data(self) -> CirculationBeforeOff:
+        """Persist the circulation setting to restore when off / fan only ends."""
+        return CirculationBeforeOff(self._circulation_before_off)
 
     @property
     def _state(self) -> ThermostatState:
@@ -164,6 +171,15 @@ class DaikinOneClimate(DaikinOneEntity, ClimateEntity, RestoreEntity):
         limit = self._state.mode_limit
         modes = ALL_HVAC_MODES if limit is None else HVAC_MODES_BY_LIMIT.get(limit, ALL_HVAC_MODES)
         return [*modes, HVACMode.FAN_ONLY] if self._has_fan_circulation else list(modes)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Forget a remembered circulation when the thermostat leaves off on its own (e.g. from the app)."""
+        mode = self._state.mode
+        if self._last_seen_mode is Mode.OFF and mode not in (None, Mode.OFF, Mode.UNKNOWN):
+            self._circulation_before_off = None
+        self._last_seen_mode = mode
+        super()._handle_coordinator_update()
 
     @property
     def hvac_mode(self) -> HVACMode | None:
@@ -239,46 +255,56 @@ class DaikinOneClimate(DaikinOneEntity, ClimateEntity, RestoreEntity):
         return super().max_temp if maximum is None else maximum
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Switch the thermostat's mode, keeping the current setpoints."""
-        leaving_fan_only = self.hvac_mode is HVACMode.FAN_ONLY
-        if hvac_mode is HVACMode.FAN_ONLY:
-            await self._async_enter_fan_only()
+        """Switch mode, keeping the setpoints; off and fan only also set the circulation."""
+        if hvac_mode in OFF_FAMILY:
+            await self._async_enter_off_family(hvac_mode)
             return
-        if not (leaving_fan_only and hvac_mode is HVACMode.OFF):
-            await self.coordinator.async_set_mode_setpoints(
-                self._thermostat_id, mode=MODE_BY_HVAC_MODE[hvac_mode], context=self._context
-            )
-        if leaving_fan_only:
-            await self._async_restore_circulation()
+        await self._async_write_active(MODE_BY_HVAC_MODE[hvac_mode])
 
-    async def _async_enter_fan_only(self) -> None:
-        """Circulation always on first (a failure then leaves heating/cooling working), then mode off."""
-        if self.hvac_mode is HVACMode.FAN_ONLY:
-            return
-        current = self._state.fan_circulate
-        self._circulation_before_fan_only = current if current in RESTORABLE_CIRCULATION else None
-        await self.coordinator.async_set_fan(
-            self._thermostat_id, circulate=FanCirculate.ALWAYS_ON, context=self._context
-        )
-        if self._state.mode is not Mode.OFF:
+    async def _async_enter_off_family(self, hvac_mode: HVACMode) -> None:
+        """Remember circulation when coming from an active mode, then write only what differs.
+
+        Fan only sets circulation before turning the mode off (a failed second write leaves the
+        equipment conditioning rather than doing nothing); off turns the mode off first.
+        """
+        if self.hvac_mode not in OFF_FAMILY:
+            current = self._state.fan_circulate
+            self._circulation_before_off = current if current in RESTORABLE_CIRCULATION else None
+        circulation = FanCirculate.ALWAYS_ON if hvac_mode is HVACMode.FAN_ONLY else FanCirculate.OFF
+        needs_fan = self._has_fan_circulation and self._state.fan_circulate is not circulation
+        needs_mode = self._state.mode is not Mode.OFF
+        if needs_fan and hvac_mode is HVACMode.FAN_ONLY:
+            await self._async_set_circulation(circulation)
+        if needs_mode:
             await self.coordinator.async_set_mode_setpoints(self._thermostat_id, mode=Mode.OFF, context=self._context)
+        if needs_fan and hvac_mode is HVACMode.OFF:
+            await self._async_set_circulation(circulation)
 
-    async def _async_restore_circulation(self) -> None:
-        """Hand circulation back to its pre-fan-only setting, or off when that is not known."""
-        circulate = self._circulation_before_fan_only or FanCirculate.OFF
+    async def _async_write_active(
+        self, mode: Mode | None, *, heat: float | None = None, cool: float | None = None
+    ) -> None:
+        """Write an active mode and/or setpoints, handing circulation back when leaving off / fan only."""
+        restore = self._circulation_before_off if mode is not None and self.hvac_mode in OFF_FAMILY else None
+        await self.coordinator.async_set_mode_setpoints(
+            self._thermostat_id, mode=mode, heat=heat, cool=cool, context=self._context
+        )
+        if mode is not None and restore is not None and restore is not self._state.fan_circulate:
+            await self._async_set_circulation(restore)
+        if mode is not None:
+            self._circulation_before_off = None
+
+    async def _async_set_circulation(self, circulate: FanCirculate) -> None:
         await self.coordinator.async_set_fan(self._thermostat_id, circulate=circulate, context=self._context)
-        self._circulation_before_fan_only = None
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Enter or leave emergency heat (the only way to reach `Mode.EMERGENCY_HEAT`)."""
-        mode = Mode.EMERGENCY_HEAT if preset_mode == PRESET_EMERGENCY_HEAT else Mode.HEAT
-        await self.coordinator.async_set_mode_setpoints(self._thermostat_id, mode=mode, context=self._context)
+        await self._async_write_active(Mode.EMERGENCY_HEAT if preset_mode == PRESET_EMERGENCY_HEAT else Mode.HEAT)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set a target temperature or range, optionally switching mode in the same write."""
         hvac_mode: HVACMode | None = kwargs.get(ATTR_HVAC_MODE)
-        if hvac_mode is HVACMode.FAN_ONLY:
-            # Fan only has no setpoint to move.
+        if hvac_mode in OFF_FAMILY:
+            # Off and fan only have no setpoint to move.
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="single_setpoint_not_applicable",
@@ -288,9 +314,7 @@ class DaikinOneClimate(DaikinOneEntity, ClimateEntity, RestoreEntity):
         high: float | None = kwargs.get(ATTR_TARGET_TEMP_HIGH)
 
         if low is not None or high is not None:
-            await self.coordinator.async_set_mode_setpoints(
-                self._thermostat_id, mode=mode, heat=low, cool=high, context=self._context
-            )
+            await self._async_write_active(mode, heat=low, cool=high)
             return
 
         temperature: float | None = kwargs.get(ATTR_TEMPERATURE)
@@ -299,13 +323,9 @@ class DaikinOneClimate(DaikinOneEntity, ClimateEntity, RestoreEntity):
 
         effective = mode if mode is not None else self._state.mode
         if effective in HEATING_MODES:
-            await self.coordinator.async_set_mode_setpoints(
-                self._thermostat_id, mode=mode, heat=temperature, context=self._context
-            )
+            await self._async_write_active(mode, heat=temperature)
         elif effective is Mode.COOL:
-            await self.coordinator.async_set_mode_setpoints(
-                self._thermostat_id, mode=mode, cool=temperature, context=self._context
-            )
+            await self._async_write_active(mode, cool=temperature)
         else:
             # Auto needs a range and off has no setpoint to move.
             raise ServiceValidationError(

@@ -915,16 +915,52 @@ async def test_circulation_to_restore_survives_a_restart(
     assert calls(aioclient_mock, "PUT", FAN_PATH)[0][2]["fanCirculate"] == 2
 
 
-@pytest.mark.parametrize("stored", [{"circulate": "ALWAYS_ON"}, {"circulate": "BOGUS"}, {"circulate": 7}, {}])
-async def test_unusable_stored_circulation_falls_back_to_off(
+@pytest.mark.parametrize("stored", [{"circulate": "BOGUS"}, {"circulate": 7}, {"circulate": "UNKNOWN"}, {}])
+async def test_unusable_stored_circulation_leaves_circulation_alone(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     aioclient_mock: AiohttpClientMocker,
     stored: dict[str, Any],
 ) -> None:
     # GIVEN
-    mock_restore_cache_with_extra_data(hass, [(State("climate.home_main_floor", HVACMode.FAN_ONLY), stored)])
-    _mock_account(aioclient_mock, detail={"json": _detail(mode=0, fanCirculate=1)})
+    mock_restore_cache_with_extra_data(hass, [(State("climate.home_main_floor", HVACMode.OFF), stored)])
+    _mock_account(aioclient_mock, detail={"json": _detail(mode=0, fanCirculate=0)})
+    entity_id = await _setup(hass, mock_config_entry)
+
+    # WHEN
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.HEAT}, blocking=True
+    )
+
+    # THEN
+    assert _put_paths(aioclient_mock) == [MSP_PATH]
+
+
+async def test_stored_always_on_circulation_is_restored_after_a_restart(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    mock_restore_cache_with_extra_data(
+        hass, [(State("climate.home_main_floor", HVACMode.OFF), {"circulate": "ALWAYS_ON"})]
+    )
+    _mock_account(aioclient_mock, detail={"json": _detail(mode=0, fanCirculate=0)})
+    entity_id = await _setup(hass, mock_config_entry)
+
+    # WHEN
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.COOL}, blocking=True
+    )
+
+    # THEN
+    assert _put_paths(aioclient_mock) == [MSP_PATH, FAN_PATH]
+    assert calls(aioclient_mock, "PUT", FAN_PATH)[0][2]["fanCirculate"] == 1
+
+
+async def test_off_with_always_on_circulation_turns_the_mode_then_the_fan_off(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    _mock_account(aioclient_mock, detail={"json": _detail(mode=3, fanCirculate=1)})
     entity_id = await _setup(hass, mock_config_entry)
 
     # WHEN
@@ -933,7 +969,193 @@ async def test_unusable_stored_circulation_falls_back_to_off(
     )
 
     # THEN
+    assert _put_paths(aioclient_mock) == [MSP_PATH, FAN_PATH]
+    assert calls(aioclient_mock, "PUT", MSP_PATH)[0][2]["mode"] == 0
     assert calls(aioclient_mock, "PUT", FAN_PATH)[0][2]["fanCirculate"] == 0
+    assert hass.states.get(entity_id).state == HVACMode.OFF
+
+
+async def test_leaving_off_restores_always_on_circulation(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    _mock_account(aioclient_mock, detail={"json": _detail(mode=3, fanCirculate=1)})
+    entity_id = await _setup(hass, mock_config_entry)
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.OFF}, blocking=True
+    )
+    aioclient_mock.mock_calls.clear()
+
+    # WHEN
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_HVAC_MODE,
+        {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.HEAT_COOL},
+        blocking=True,
+    )
+
+    # THEN
+    assert _put_paths(aioclient_mock) == [MSP_PATH, FAN_PATH]
+    assert calls(aioclient_mock, "PUT", FAN_PATH)[0][2]["fanCirculate"] == 1
+    assert hass.states.get(entity_id).state == HVACMode.HEAT_COOL
+
+
+async def test_fan_only_with_always_on_circulation_only_turns_the_mode_off(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    _mock_account(aioclient_mock, detail={"json": _detail(mode=1, fanCirculate=1)})
+    entity_id = await _setup(hass, mock_config_entry)
+
+    # WHEN
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_HVAC_MODE,
+        {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.FAN_ONLY},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.HEAT}, blocking=True
+    )
+
+    # THEN
+    assert _put_paths(aioclient_mock) == [MSP_PATH, MSP_PATH]
+
+
+async def test_switching_between_off_and_fan_only_keeps_the_remembered_circulation(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    _mock_account(aioclient_mock, detail={"json": _detail(mode=2, fanCirculate=2)})
+    entity_id = await _setup(hass, mock_config_entry)
+
+    # WHEN
+    for hvac_mode in (HVACMode.OFF, HVACMode.FAN_ONLY, HVACMode.OFF, HVACMode.COOL):
+        await hass.services.async_call(
+            CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: hvac_mode}, blocking=True
+        )
+
+    # THEN
+    fan_writes = [c[2]["fanCirculate"] for c in calls(aioclient_mock, "PUT", FAN_PATH)]
+    assert fan_writes == [0, 1, 0, 2]
+    assert _put_paths(aioclient_mock) == [MSP_PATH, FAN_PATH, FAN_PATH, FAN_PATH, MSP_PATH, FAN_PATH]
+
+
+async def test_leaving_off_from_the_app_forgets_the_remembered_circulation(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    _mock_account(aioclient_mock, detail={"json": _detail(mode=1, fanCirculate=2)})
+    entity_id = await _setup(hass, mock_config_entry)
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.OFF}, blocking=True
+    )
+    coordinator = mock_config_entry.runtime_data
+    for mode in (1, 0):
+        aioclient_mock.clear_requests()
+        _mock_account(aioclient_mock, detail={"json": _detail(mode=mode, fanCirculate=0)})
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+    aioclient_mock.mock_calls.clear()
+
+    # WHEN
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.HEAT}, blocking=True
+    )
+
+    # THEN
+    assert _put_paths(aioclient_mock) == [MSP_PATH]
+
+
+async def test_off_without_fan_circulation_only_writes_the_mode(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    payload = _detail(mode=1)
+    del payload["fanCirculate"]
+    _mock_account(aioclient_mock, detail={"json": payload})
+    entity_id = await _setup(hass, mock_config_entry)
+
+    # WHEN
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.OFF}, blocking=True
+    )
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.HEAT}, blocking=True
+    )
+
+    # THEN
+    assert _put_paths(aioclient_mock) == [MSP_PATH, MSP_PATH]
+
+
+async def test_preset_out_of_off_restores_circulation(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    _mock_account(aioclient_mock, detail={"json": _detail(mode=1, fanCirculate=1, modeEmHeatAvailable=1)})
+    entity_id = await _setup(hass, mock_config_entry)
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.OFF}, blocking=True
+    )
+    aioclient_mock.mock_calls.clear()
+
+    # WHEN
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_PRESET_MODE,
+        {ATTR_ENTITY_ID: entity_id, ATTR_PRESET_MODE: "emergency_heat"},
+        blocking=True,
+    )
+
+    # THEN
+    assert _put_paths(aioclient_mock) == [MSP_PATH, FAN_PATH]
+    assert calls(aioclient_mock, "PUT", MSP_PATH)[0][2]["mode"] == 4
+    assert calls(aioclient_mock, "PUT", FAN_PATH)[0][2]["fanCirculate"] == 1
+
+
+async def test_set_temperature_with_a_mode_out_of_off_restores_circulation(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    _mock_account(aioclient_mock, detail={"json": _detail(mode=2, fanCirculate=1)})
+    entity_id = await _setup(hass, mock_config_entry)
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.OFF}, blocking=True
+    )
+    aioclient_mock.mock_calls.clear()
+
+    # WHEN
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_TEMPERATURE,
+        {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.HEAT, ATTR_TEMPERATURE: 21.0},
+        blocking=True,
+    )
+
+    # THEN
+    assert _put_paths(aioclient_mock) == [MSP_PATH, FAN_PATH]
+    assert calls(aioclient_mock, "PUT", MSP_PATH)[0][2] == {"mode": 1, "heatSetpoint": 21.0, "coolSetpoint": 24.0}
+
+
+async def test_set_temperature_cannot_target_off(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    _mock_account(aioclient_mock, detail={"json": _detail(mode=1)})
+    entity_id = await _setup(hass, mock_config_entry)
+
+    # WHEN
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            CLIMATE_DOMAIN,
+            SERVICE_SET_TEMPERATURE,
+            {ATTR_ENTITY_ID: entity_id, ATTR_HVAC_MODE: HVACMode.OFF, ATTR_TEMPERATURE: 21.0},
+            blocking=True,
+        )
+
+    # THEN
+    assert err.value.translation_key == "single_setpoint_not_applicable"
+    assert _put_paths(aioclient_mock) == []
 
 
 async def test_set_temperature_cannot_target_fan_only(

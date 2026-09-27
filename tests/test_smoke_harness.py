@@ -36,5 +36,5 @@ async def test_custom_integration_loadable(hass: HomeAssistant) -> None:
     """The daikinone custom integration is visible to the HA loader."""
     integration = await async_get_integration(hass, DOMAIN)
     assert integration.version is not None
-    assert str(integration.version) == "1.1.0"
+    assert str(integration.version) == "1.2.0"
     assert integration.iot_class == "cloud_polling"
