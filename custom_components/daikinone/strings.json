@@ -174,7 +174,7 @@
       "message": "Could not send the change to Daikin One. Try again in a moment."
     },
     "setpoint_delta": {
-      "message": "The heat and cool setpoints must be at least {delta} °C apart."
+      "message": "The heat and cool setpoints must be at least {delta} apart."
     },
     "setpoint_out_of_range": {
       "message": "The setpoint is outside the range the thermostat allows."

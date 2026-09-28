@@ -14,15 +14,18 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 import logging
+import math
 import random
 from typing import TYPE_CHECKING, Any, Final
 
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import CALLBACK_TYPE, Context, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr, issue_registry as ir
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import TimestampDataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .api import (
     DaikinAuthError,
@@ -300,18 +303,21 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
             elif explicit_range_violates_delta and resolved_mode is Mode.COOL:
                 heat_value = cool_value - delta
 
-            # Checked on every path, not just an explicit pair: a mode-only write echoes the
-            # snapshot's setpoints back, and Daikin rejects the whole PUT if they violate the
-            # delta. The tolerance only absorbs float noise from the push arithmetic above
-            # (real values are on a 0.1 grid, so a genuine violation is off by >= 0.1).
-            if cool_value - heat_value < delta - _DELTA_TOLERANCE:
-                raise ServiceValidationError(
-                    translation_domain=DOMAIN,
-                    translation_key="setpoint_delta",
-                    translation_placeholders={"delta": f"{delta:g}"},
+            try:
+                self._check_setpoints(state, heat_value, cool_value, delta)
+            except ServiceValidationError as err:
+                if not self.read_only:
+                    raise
+                # Nothing would be sent in read-only mode, so nothing failed: note what the thermostat
+                # would refuse once writes are enabled.
+                _LOGGER.warning(
+                    "Read-only: the thermostat would reject %s-%s for %s (%s)",
+                    heat_value,
+                    cool_value,
+                    thermostat_id,
+                    err.translation_key,
                 )
-
-            self._check_range(state, heat_value, cool_value)
+                return
             heat_value = round(heat_value, 1)
             cool_value = round(cool_value, 1)
 
@@ -400,6 +406,25 @@ class DaikinOneCoordinator(TimestampDataUpdateCoordinator[dict[str, Thermostat]]
         if thermostat is None:
             raise ServiceValidationError(translation_domain=DOMAIN, translation_key="state_unknown")
         return thermostat
+
+    def _check_setpoints(self, state: ThermostatState, heat: float, cool: float, delta: float) -> None:
+        """Reject a pair Daikin would refuse. Checked on every path, not just an explicit pair: a mode-only write
+        echoes the snapshot's setpoints back, and Daikin rejects the whole PUT if they violate the delta. The
+        tolerance only absorbs float noise from the push arithmetic (real values are on a 0.1 grid, so a genuine
+        violation is off by >= 0.1)."""
+        if cool - heat < delta - _DELTA_TOLERANCE:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="setpoint_delta",
+                translation_placeholders={"delta": self._shown_interval(delta)},
+            )
+        self._check_range(state, heat, cool)
+
+    def _shown_interval(self, celsius: float) -> str:
+        """A temperature difference in Home Assistant's unit, rounded up to 0.1 so the shown minimum is enough."""
+        unit = self.hass.config.units.temperature_unit
+        value = TemperatureConverter.convert_interval(celsius, UnitOfTemperature.CELSIUS, unit)
+        return f"{math.ceil(round(value * 10, 6)) / 10:g} {unit}"
 
     @staticmethod
     def _check_range(state: ThermostatState, *values: float) -> None:

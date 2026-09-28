@@ -16,6 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr, entity_registry as er, issue_registry as ir
 from homeassistant.helpers.entity import Entity, EntityDescription
+from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -784,6 +785,21 @@ async def test_single_cool_setpoint_pushes_the_heat_setpoint(
     assert put[0][2] == {"mode": 2, "heatSetpoint": 19.0, "coolSetpoint": 21.0}
 
 
+async def test_the_minimum_gap_is_shown_in_home_assistants_unit(
+    hass: HomeAssistant, init_integration: MockConfigEntry, mock_api: AiohttpClientMocker
+) -> None:
+    # GIVEN
+    hass.config.units = US_CUSTOMARY_SYSTEM
+    coordinator = init_integration.runtime_data
+
+    # WHEN
+    with pytest.raises(ServiceValidationError) as err:
+        await coordinator.async_set_mode_setpoints("dev1", heat=20.0, cool=21.0)
+
+    # THEN
+    assert err.value.translation_placeholders == {"delta": "3.6 °F"}
+
+
 async def test_range_write_below_the_delta_is_rejected(
     hass: HomeAssistant, init_integration: MockConfigEntry, mock_api: AiohttpClientMocker
 ) -> None:
@@ -794,7 +810,7 @@ async def test_range_write_below_the_delta_is_rejected(
         await coordinator.async_set_mode_setpoints("dev1", heat=20.0, cool=21.0)
 
     assert err.value.translation_key == "setpoint_delta"
-    assert err.value.translation_placeholders == {"delta": "2"}
+    assert err.value.translation_placeholders == {"delta": "2 °C"}
     assert not calls(mock_api, "PUT", f"{DEVICES_PATH}/dev1/msp")
 
 

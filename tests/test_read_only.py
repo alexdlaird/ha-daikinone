@@ -17,7 +17,6 @@ from homeassistant.components.select import ATTR_OPTION, DOMAIN as SELECT_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.const import ATTR_ENTITY_ID, ATTR_TEMPERATURE, SERVICE_TURN_OFF, STATE_ON, STATE_UNKNOWN
 from homeassistant.core import Context, Event, HomeAssistant, callback
-from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUser
@@ -187,8 +186,11 @@ async def test_schedule_write_is_recorded_and_never_sent(
     assert hass.states.get(LAST_WRITE).attributes["schedule"]["scheduleEnabled"] is False
 
 
-async def test_invalid_writes_are_still_rejected(
-    hass: HomeAssistant, mock_config_entry: MockConfigEntry, aioclient_mock: AiohttpClientMocker
+async def test_a_write_the_thermostat_would_reject_is_only_logged(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     # GIVEN
     _mock_account(aioclient_mock)
@@ -196,17 +198,17 @@ async def test_invalid_writes_are_still_rejected(
     climate = _entity_id(hass, CLIMATE_DOMAIN, "dev1-climate")
 
     # WHEN
-    with pytest.raises(ServiceValidationError) as err:
-        await hass.services.async_call(
-            CLIMATE_DOMAIN,
-            SERVICE_SET_TEMPERATURE,
-            {ATTR_ENTITY_ID: climate, ATTR_TARGET_TEMP_LOW: 23.0, ATTR_TARGET_TEMP_HIGH: 24.0},
-            blocking=True,
-        )
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_TEMPERATURE,
+        {ATTR_ENTITY_ID: climate, ATTR_TARGET_TEMP_LOW: 23.0, ATTR_TARGET_TEMP_HIGH: 24.0},
+        blocking=True,
+    )
 
     # THEN
-    assert err.value.translation_key == "setpoint_delta"
+    assert _puts(aioclient_mock) == []
     assert hass.states.get(LAST_WRITE).state == STATE_UNKNOWN
+    assert "would reject" in caplog.text, "nothing is sent in read-only mode, so nothing fails"
 
 
 async def test_writable_entries_record_nothing(
